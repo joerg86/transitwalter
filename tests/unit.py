@@ -8,7 +8,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from transitwalter import itinerary as I
-from transitwalter.export import decode_polyline, gpx
+from transitwalter.export import Exports, decode_polyline, gpx, slug
 from transitwalter.places import _COORDS, _IATA, airports, plain
 
 failed = 0
@@ -32,6 +32,27 @@ check("Polyline dekodieren", len(pts) == 4 and abs(pts[0][0] - 51.5048) < 0.001 
 g = gpx("Test & <Weg>", [leg("WALK", "2026-10-29T12:00:00Z", "2026-10-29T12:20:00Z", "Bahnhof", "Terminal",
                              duration=1200, distance=1664, legGeometry={"points": "ggrfaBybapMfJfb@", "precision": 6})])
 check("GPX escaped und mit Trackpunkten", "Test &amp; &lt;Weg&gt;" in g and g.count("<trkpt") == 2)
+
+check("Dateiname", slug("Fußweg Holzwickede, Bahnhof → Dortmund Airport") == "fussweg-holzwickede-bahnhof-dortmund-airport")
+
+# Exporte: Pfade
+import tempfile
+ex = Exports(tempfile.mkdtemp(), "https://example.org")
+walk = leg("WALK", "2026-10-29T12:00:00Z", "2026-10-29T12:20:00Z", "Bahnhof", "Terminal", duration=1200, distance=1664,
+           legGeometry={"points": "ggrfaBybapMfJfb@", "precision": 6})
+for side, (la, lo) in (("from", (51.50477, 7.61965)), ("to", (51.51461, 7.61264))):
+    walk[side].update(lat=la, lon=lo)
+bus = leg("BUS", "2026-10-29T11:00:00Z", "2026-10-29T12:00:00Z", "Ort", "Bahnhof", duration=3600, displayName="RE7")
+for side in ("from", "to"):
+    bus[side].update(lat=51.5, lon=7.6)
+short = {**walk, "duration": 60}
+r = ex.save("Ort → Terminal", [bus, short, walk])
+eid = r["map_url"].rsplit("/", 1)[1]
+check("Ein GPX pro (nicht zu kurzem) Fußweg", len(r["walks"]) == 1 and r["walks"][0]["gpx_url"].endswith(f"{eid}.w1.gpx"), r["walks"])
+body, ctype, name = ex.load(f"{eid}.w1.gpx")
+check("Einzel-GPX mit Wegpunkten und Dateiname", b"<wpt" in body and name == "fussweg-bahnhof-terminal.gpx", name)
+check("Karte verlinkt Einzel-GPX", f"{eid}.w1.gpx".encode() in ex.load(eid)[0])
+check("Ungültige Pfade abgelehnt", ex.load("../etc/passwd") is None and ex.load(f"{eid}.w1") is None and ex.load(f"{eid}.w9.gpx") is None)
 
 # Warnungen
 it = {"legs": [

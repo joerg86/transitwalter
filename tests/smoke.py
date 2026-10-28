@@ -28,6 +28,7 @@ CALLS = [
     ("transit_walk_route", {"origin": "Holzwickede Bahnhof", "destination": "DTM"}),
     ("transit_departures", {"stop": "Aegviidu", "time": f"{SOON}T16:00", "count": 3}),
     ("transit_export", None),  # itinerary_id kommt aus transit_journey_plan
+    ("transit_gpx", None),     # gpx_url des ersten Fußwegs aus transit_export
 ]
 
 # (Tool, Argumente, erwarteter Code)
@@ -36,27 +37,35 @@ ERRORS = [
     ("transit_journey_plan", {"origin": "Berlin", "destination": "Hamburg", "time": "morgen"}, "INVALID_ARGUMENT"),
     ("transit_journey_plan", {"origin": "Berlin", "destination": "Hamburg", "max_walk_minutes": 500}, "INVALID_ARGUMENT"),
     ("transit_export", {"itinerary_id": "gibtsnicht"}, "EXPORT_NOT_FOUND"),
+    ("transit_gpx", {"file": "../../etc/passwd"}, "EXPORT_NOT_FOUND"),
 ]
 
 
 async def main() -> int:
     token = os.environ["MCP_TOKEN"]
     http = create_mcp_http_client(headers={"Authorization": f"Bearer {token}"})
-    failed, itinerary_id, urls = 0, None, []
+    failed, itinerary_id, walk_gpx, urls = 0, None, None, []
     async with http, streamable_http_client(URL, http_client=http) as (read, write, *_):
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools = {t.name for t in (await session.list_tools()).tools}
             print(f"{len(tools)} Tools: {', '.join(sorted(tools))}\n")
             for name, args in CALLS:
-                if args is None:
+                if args is None and name == "transit_export":
                     args = {"itinerary_id": itinerary_id}
+                elif args is None:
+                    args = {"file": walk_gpx}
                 r = await session.call_tool(name, args)
                 data = r.structured_content or (json.loads(r.content[0].text) if not r.is_error else {})
                 if name == "transit_journey_plan" and data.get("itineraries") and not itinerary_id:
                     itinerary_id = data["itineraries"][0]["id"]
                 if data.get("map_url"):
                     urls += [data["map_url"], data["gpx_url"]]
+                if name == "transit_export" and data.get("walks"):
+                    walk_gpx = data["walks"][0]["gpx_url"]
+                    urls.append(walk_gpx)
+                if name == "transit_gpx":
+                    data = data if "<gpx" in data.get("gpx", "") else {}
                 ok = not r.is_error and bool(data)
                 failed += not ok
                 text = r.content[0].text if r.content else ""
@@ -69,7 +78,7 @@ async def main() -> int:
                 print(f"{'ok    ' if ok else 'FEHLER'} {name:22} erwartet {expected:18} bekommen {code}")
     base = URL.rsplit("/mcp", 1)[0]
     async with httpx.AsyncClient() as c:
-        for url in urls[:2]:
+        for url in urls:
             # Exporte sind ohne Token erreichbar; lokal zeigt PUBLIC_BASE_URL evtl. woanders hin
             r = await c.get(base + url[url.index("/x/"):])
             ok = r.status_code == 200 and (b"<gpx" in r.content or b"leaflet" in r.content)

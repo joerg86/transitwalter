@@ -11,7 +11,8 @@ Daten kommen von [Transitous](https://transitous.org) (öffentliche MOTIS-API, o
 | `transit_journey_plan` | Verbindungen von A nach B inkl. Fußwegen, Abfahrt oder späteste Ankunft (`arrive_by`), Verkehrsmittel-Auswahl, Zwischenhalt (`via`), max. Fußweg, Gehtempo |
 | `transit_departures` | Abfahrten/Ankünfte an einer Haltestelle – „wann fährt der letzte Bus vom Trail?“ |
 | `transit_walk_route` | reiner Fußweg mit Dauer, Strecke, Straßen + Karte und GPX |
-| `transit_export` | Fußwege (oder alles) einer geplanten Verbindung als Karte und GPX |
+| `transit_export` | Fußwege (oder alles) einer geplanten Verbindung als Karte und GPX – jeder Fußweg auch als eigene GPX-Datei zum Navigieren |
+| `transit_gpx` | Inhalt einer GPX-Datei direkt über MCP, falls der Assistent damit weiterarbeiten will |
 | `transit_place_search` | Orte, Adressen, Haltestellen, Gipfel, Kaps … (OSM), mit `ref` für die anderen Tools |
 | `transit_airport` | Flughafen per IATA-Code mit den Haltestellen am Terminal |
 
@@ -34,7 +35,7 @@ Zeiten sind Ortszeit des Start- (bzw. bei `arrive_by` des Ziel-)Orts, z. B. `202
 
 Standard ist ein zügiges Tempo (`WALK_SPEED_KMH=5.5`) und bis zu 30 min Fußweg zur ersten/von der letzten Haltestelle (`MAX_WALK_MINUTES`), damit lieber gelaufen als umgestiegen wird – z. B. Holzwickede Bahnhof → Dortmund Airport (18 min) statt AirportExpress. Beides pro Aufruf überschreibbar.
 
-Karten und GPX liegen unter `/x/<zufällige-id>` (ohne Token erreichbar, 90 Tage). Die GPX-Datei lässt sich in Komoot (Planen → GPX importieren), OsmAnd, Outdooractive usw. öffnen.
+Karten und GPX liegen unter `/x/<zufällige-id>` (ohne Token erreichbar, 90 Tage): die Karte unter `/x/<id>`, alles als GPX unter `/x/<id>.gpx`, jeder Fußweg einzeln unter `/x/<id>.w1.gpx`, `.w2.gpx` … (mit Start und Ziel als Wegpunkten und sprechendem Dateinamen). Die GPX-Datei lässt sich in Komoot (Planen → GPX importieren), OsmAnd, Outdooractive usw. öffnen.
 
 ### Warnungen
 

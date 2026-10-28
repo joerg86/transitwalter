@@ -152,7 +152,9 @@ class Places:
         }
         if candidates and candidates[0]["is_airport"]:
             s = candidates[0]
-            info["place"] = Place(name=f"{ap['name']} ({s['name']})", lat=s["lat"], lon=s["lon"],
+            # "Dortmund Airport (Dortmund Airport)" vermeiden
+            name = ap["name"] if plain(s["name"]) in plain(ap["name"]) else f"{ap['name']} ({s['name']})"
+            info["place"] = Place(name=name, lat=s["lat"], lon=s["lon"],
                                   ref=f"{s['lat']},{s['lon']}", tz=s.get("tz"), kind="airport", country=ap["country"])
         else:
             near = await self.api.reverse_geocode(ap["lat"], ap["lon"])

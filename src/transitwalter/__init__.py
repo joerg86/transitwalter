@@ -54,7 +54,8 @@ mcp = MCPServer(
         "transport='regional' (ohne IC/ICE und Fernbusse; Sonderbusse mit eigenem Tarif wie Flughafen-Expressbusse "
         "erkennt der Filter nicht). Für Wanderungen: max_walk_minutes erhöhen, wenn der Start/das Ziel abseits liegt; "
         "transit_departures zeigt, wann der letzte Bus fährt; transit_walk_route und transit_export "
-        "liefern Fußwege als Karte und GPX (z. B. für Komoot). Antworten mit 'warnings' bzw. "
+        "liefern Fußwege als Karte und GPX (z. B. für Komoot) – unter 'walks' jeder Fußweg als eigene "
+        "GPX-Datei zum Navigieren; diese Links dem Nutzer einzeln nennen. Antworten mit 'warnings' bzw. "
         "'timetable_hint' unbedingt an den Nutzer weitergeben – Fahrpläne liegen je nach Land oft nur "
         "Tage oder wenige Wochen im Voraus vor. Preise und Flüge gibt es hier nicht. "
         f"Fehler beginnen mit einem festen Code, z. B. 'PLACE_NOT_FOUND: …'. Mögliche Codes: {', '.join(E.ALL)}."
@@ -306,6 +307,22 @@ async def transit_export(itinerary_id: str, part: Literal["walks", "all"] = "wal
     }
 
 
+@tool
+async def transit_gpx(file: str) -> dict:
+    """Inhalt einer GPX-Datei aus transit_export/transit_walk_route – zum Weiterverarbeiten
+    (z. B. an einen Routenplaner geben, Punkte auslesen, als Datei speichern).
+
+    file: eine gpx_url (auch aus 'walks') oder nur der Dateiname, z. B. 'abc….w1.gpx'.
+    """
+    name = file.strip().rsplit("/x/", 1)[-1]
+    found = exports.load(name) if name.endswith(".gpx") else None
+    if not found:
+        raise TransitError(E.EXPORT_NOT_FOUND, "GPX-Datei unbekannt oder abgelaufen – transit_export neu aufrufen")
+    body, _, filename = found
+    text = body.decode("utf-8")
+    return {"filename": filename, "track_points": text.count("<trkpt"), "waypoints": text.count("<wpt"), "gpx": text}
+
+
 # ---------- Abfahrten ----------
 
 @tool
@@ -375,8 +392,8 @@ class BearerAuth:
                 if not found:
                     await _respond(send, 404, b"not found")
                     return
-                body, ctype = found
-                extra = [(b"content-disposition", b"attachment; filename=transitwalter.gpx")] if path.endswith(".gpx") else []
+                body, ctype, filename = found
+                extra = [(b"content-disposition", f'attachment; filename="{filename}"'.encode())] if filename else []
                 await _respond(send, 200, body, ctype.encode(), extra)
                 return
             auth = dict(scope["headers"]).get(b"authorization", b"")

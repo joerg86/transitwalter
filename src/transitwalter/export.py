@@ -1,6 +1,7 @@
 """GPX-Dateien und Kartenseiten für Fußwege (und ganze Verbindungen).
 
-Dateien liegen unter DATA_DIR/exports und werden über /x/<id>.gpx bzw. /x/<id> ausgeliefert.
+Dateien liegen unter DATA_DIR/exports und werden über /x/<id> (Karte), /x/<id>.gpx (alles) und
+/x/<id>.w<n>.gpx (einzelner Fußweg, zum Navigieren) ausgeliefert.
 Die IDs sind lang und zufällig (wie ein geteilter Link), deshalb ohne Bearer-Token erreichbar.
 GPX lässt sich in Komoot (Planen → GPX importieren), OsmAnd, Outdooractive usw. öffnen.
 """
@@ -8,12 +9,21 @@ GPX lässt sich in Komoot (Planen → GPX importieren), OsmAnd, Outdooractive us
 import html
 import json
 import secrets
+import re
 import time
+import unicodedata
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 KEEP_DAYS = 90
-_ID_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+_FILE = re.compile(r"^([A-Za-z0-9_-]{16,32})(?:\.(w\d{1,2}))?(\.gpx)?$")
+MIN_WALK_S = 180  # kürzere Fußwege (Umstieg am Bahnsteig) bekommen keine eigene Datei
+
+
+def slug(text: str) -> str:
+    """'Fußweg Holzwickede, Bahnhof → Dortmund Airport' → 'fussweg-holzwickede-bahnhof-dortmund-airport'."""
+    text = unicodedata.normalize("NFKD", text.replace("ß", "ss")).encode("ascii", "ignore").decode().lower()
+    return re.sub(r"[^a-z0-9]+", "-", text).strip("-")[:80] or "route"
 
 
 def decode_polyline(points: str, precision: int = 6) -> list[tuple[float, float]]:
@@ -52,9 +62,20 @@ def leg_title(leg: dict) -> str:
     return f"{leg.get('displayName') or leg['mode']} {f} → {t}"
 
 
+def walk_name(leg: dict) -> str:
+    return f"Fußweg {leg['from'].get('name') or 'Start'} → {leg['to'].get('name') or 'Ziel'}"
+
+
 def gpx(title: str, legs: list[dict]) -> str:
-    tracks = []
+    """Ein Track pro Abschnitt; Fußwege bekommen Start und Ziel zusätzlich als Wegpunkte."""
+    tracks, wpts = [], []
     for leg in legs:
+        if leg["mode"] == "WALK":
+            for side in ("from", "to"):
+                p = leg[side]
+                if p.get("lat") is None:
+                    continue
+                wpts.append(f'<wpt lat="{p["lat"]:.6f}" lon="{p["lon"]:.6f}"><name>{escape(p.get("name") or side)}</name></wpt>')
         pts = "".join(f'<trkpt lat="{la:.6f}" lon="{lo:.6f}"/>' for la, lo in leg_points(leg))
         tracks.append(f"<trk><name>{escape(leg_title(leg))}</name><type>{escape(leg['mode'].lower())}</type>"
                       f"<trkseg>{pts}</trkseg></trk>")
@@ -62,14 +83,14 @@ def gpx(title: str, legs: list[dict]) -> str:
             '<gpx version="1.1" creator="transitwalter" xmlns="http://www.topografix.com/GPX/1/1">'
             f"<metadata><name>{escape(title)}</name>"
             "<copyright author=\"OpenStreetMap-Mitwirkende\"><license>https://opendatacommons.org/licenses/odbl/</license></copyright>"
-            f"</metadata>{''.join(tracks)}</gpx>\n")
+            f"</metadata>{''.join(dict.fromkeys(wpts))}{''.join(tracks)}</gpx>\n")
 
 
-def geojson(legs: list[dict]) -> dict:
+def geojson(legs: list[dict], walk_files: dict[int, str]) -> dict:
     return {"type": "FeatureCollection", "features": [
-        {"type": "Feature", "properties": {"title": leg_title(leg), "mode": leg["mode"]},
+        {"type": "Feature", "properties": {"title": leg_title(leg), "mode": leg["mode"], "gpx": walk_files.get(i)},
          "geometry": {"type": "LineString", "coordinates": [[lo, la] for la, lo in leg_points(leg)]}}
-        for leg in legs
+        for i, leg in enumerate(legs)
     ]}
 
 
@@ -79,8 +100,9 @@ MAP_PAGE = """<!doctype html><html lang="de"><head><meta charset="utf-8">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>html,body{{margin:0;height:100%;font:14px system-ui,sans-serif}}#map{{position:absolute;inset:0}}
 #box{{position:absolute;z-index:1000;top:10px;left:50px;right:10px;max-width:520px;background:#fff;padding:8px 12px;
-border-radius:8px;box-shadow:0 1px 4px #0004}}#box a{{margin-right:12px}}</style></head><body>
-<div id="map"></div><div id="box"><b>{title}</b><br><a href="{gpx}" download>GPX herunterladen</a>
+border-radius:8px;box-shadow:0 1px 4px #0004}}#box a{{margin-right:12px}}#box ol{{margin:6px 0;padding-left:20px}}
+#box li{{margin:3px 0}}</style></head><body>
+<div id="map"></div><div id="box"><b>{title}</b>{walks}<a href="{gpx}" download>Alles als GPX</a>
 <small>für Komoot: Planen → GPX importieren</small></div>
 <script>
 const data = {data};
@@ -90,10 +112,18 @@ L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{maxZoom: 1
 // erst den Ausschnitt setzen, dann die Linien einfügen – sonst zeichnet Leaflet sie nicht
 const layer = L.geoJSON(data, {{
   style: f => f.properties.mode === 'WALK' ? {{color: '#d62728', weight: 5, dashArray: '6 6'}} : {{color: '#1f77b4', weight: 4}},
-  onEachFeature: (f, l) => l.bindPopup(f.properties.title)
+  onEachFeature: (f, l) => l.bindPopup(f.properties.title +
+    (f.properties.gpx ? `<br><a href="${{f.properties.gpx}}" download>GPX für diesen Fußweg</a>` : ''))
 }});
-map.fitBounds(layer.getBounds(), {{padding: [40, 40], maxZoom: 17}});
+// Ausschnitt neu berechnen, solange niemand selbst zoomt – beim ersten Aufruf ist das Fenster evtl. noch 0×0
+let touched = false;
+const fit = () => {{ if (touched) return; map.invalidateSize(); map.fitBounds(layer.getBounds(), {{padding: [40, 40], maxZoom: 17}}); }};
+fit();
 layer.addTo(map);
+map.on('mousedown touchstart wheel', () => {{ touched = true; }});
+window.addEventListener('load', fit);
+window.addEventListener('resize', fit);
+setTimeout(fit, 300);
 </script></body></html>
 """
 
@@ -104,27 +134,46 @@ class Exports:
         self.base_url = base_url.rstrip("/")
 
     def save(self, title: str, legs: list[dict]) -> dict:
+        """Karte + GPX für alles + ein GPX pro Fußweg. Liefert die URLs."""
         self.dir.mkdir(parents=True, exist_ok=True)
         self._cleanup()
         eid = secrets.token_urlsafe(16)
+        names = {f"{eid}.gpx": f"{slug(title)}.gpx"}
         (self.dir / f"{eid}.gpx").write_text(gpx(title, legs), encoding="utf-8")
+        walks, walk_files, items = [], {}, []
+        for i, leg in enumerate(legs):
+            if leg["mode"] != "WALK" or (leg["duration"] < MIN_WALK_S and len(legs) > 1):
+                continue
+            n = len(walks) + 1
+            file, name = f"{eid}.w{n}.gpx", walk_name(leg)
+            (self.dir / file).write_text(gpx(name, [leg]), encoding="utf-8")
+            names[file] = f"{slug(name)}.gpx"
+            walk_files[i] = file
+            km, minutes = round((leg.get("distance") or 0) / 1000, 1), round(leg["duration"] / 60)
+            walks.append({"name": name, "distance_km": km, "minutes": minutes, "gpx_url": f"{self.base_url}/x/{file}"})
+            items.append(f'<li>{html.escape(name)} ({km} km, {minutes} min) – <a href="{file}" download>GPX</a></li>')
+        (self.dir / f"{eid}.json").write_text(json.dumps(names), encoding="utf-8")
         page = MAP_PAGE.format(title=html.escape(title), gpx=f"{eid}.gpx",
-                               data=json.dumps(geojson(legs)).replace("</", "<\\/"))
+                               walks=f"<ol>{''.join(items)}</ol>" if items else "<br>",
+                               data=json.dumps(geojson(legs, walk_files)).replace("</", "<\\/"))
         (self.dir / f"{eid}.html").write_text(page, encoding="utf-8")
         return {"map_url": f"{self.base_url}/x/{eid}", "gpx_url": f"{self.base_url}/x/{eid}.gpx",
-                "expires_days": KEEP_DAYS}
+                "walks": walks, "expires_days": KEEP_DAYS}
 
-    def load(self, name: str) -> tuple[bytes, str] | None:
-        """Pfad '/x/<id>' oder '/x/<id>.gpx' → (Inhalt, Content-Type)."""
-        eid, gpx_file = (name[:-4], True) if name.endswith(".gpx") else (name, False)
-        if not eid or not set(eid) <= _ID_CHARS:
+    def load(self, name: str) -> tuple[bytes, str, str | None] | None:
+        """'/x/<id>', '/x/<id>.gpx' oder '/x/<id>.w<n>.gpx' → (Inhalt, Content-Type, Dateiname zum Download)."""
+        m = _FILE.match(name)
+        if not m or (m[2] and not m[3]):
             return None
-        path = self.dir / f"{eid}.{'gpx' if gpx_file else 'html'}"
+        eid, file = m[1], name if m[3] else f"{m[1]}.html"
+        path = self.dir / file
         if not path.is_file():
             return None
-        if gpx_file:
-            return path.read_bytes(), "application/gpx+xml"
-        return path.read_bytes(), "text/html; charset=utf-8"
+        if not m[3]:
+            return path.read_bytes(), "text/html; charset=utf-8", None
+        meta = self.dir / f"{eid}.json"
+        names = json.loads(meta.read_text(encoding="utf-8")) if meta.is_file() else {}
+        return path.read_bytes(), "application/gpx+xml", names.get(file, "transitwalter.gpx")
 
     def _cleanup(self) -> None:
         limit = time.time() - KEEP_DAYS * 86400
