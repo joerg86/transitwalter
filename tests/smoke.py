@@ -27,6 +27,7 @@ CALLS = [
     ("transit_journey_plan", {"origin": "LTN", "destination": "Ivinghoe Beacon", "time": f"{SOON}T09:00", "results": 1}),
     ("transit_walk_route", {"origin": "Holzwickede Bahnhof", "destination": "DTM"}),
     ("transit_departures", {"stop": "Aegviidu", "time": f"{SOON}T16:00", "count": 3}),
+    ("transit_db_prices", {"origin": "Osnabrück Hbf", "destination": "Berlin Hbf", "time": f"{SOON}T09:00", "results": 2}),
     ("transit_export", None),  # itinerary_id kommt aus transit_journey_plan
     ("transit_gpx", None),     # gpx_url des ersten Fußwegs aus transit_export
 ]
@@ -38,6 +39,7 @@ ERRORS = [
     ("transit_journey_plan", {"origin": "Berlin", "destination": "Hamburg", "max_walk_minutes": 500}, "INVALID_ARGUMENT"),
     ("transit_export", {"itinerary_id": "gibtsnicht"}, "EXPORT_NOT_FOUND"),
     ("transit_gpx", {"file": "../../etc/passwd"}, "EXPORT_NOT_FOUND"),
+    ("transit_db_prices", {"origin": "Osnabrück Hbf", "destination": "Berlin Hbf", "results": 9}, "INVALID_ARGUMENT"),
 ]
 
 

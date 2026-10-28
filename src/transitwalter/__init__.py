@@ -3,7 +3,8 @@
 Verbindungen, Abfahrten und Fußwege weltweit über die öffentliche MOTIS-API von
 Transitous (offene Fahrplandaten + OpenStreetMap). Flughäfen per IATA-Code mit
 Haltestelle am Terminal, Warnungen bei unplausiblen Verbindungen und fehlenden
-Fahrplandaten, Fußwege als GPX/Karte.
+Fahrplandaten, Fußwege als GPX/Karte. Für Deutschland zusätzlich Bahnpreise über die
+(inoffizielle) Schnittstelle des DB Navigators.
 """
 
 import functools
@@ -19,11 +20,12 @@ import uvicorn
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
 
+from . import db as D
 from . import errors as E
 from . import itinerary as I
 from .errors import TransitError
 from .export import Exports
-from .places import Places, from_geocode
+from .places import _COORDS, _IATA, Places, from_geocode
 from .transitous import ATTRIBUTION, Transitous
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -34,6 +36,8 @@ api = Transitous(
     per_minute=int(os.environ.get("TRANSITOUS_REQUESTS_PER_MINUTE", "20")),
 )
 places = Places(api)
+dbapi = D.DB(os.environ.get("DB_USER_AGENT", "transitwalter/0.1"),
+             per_minute=int(os.environ.get("DB_REQUESTS_PER_MINUTE", "10")))
 # Persönliche Standards (überschreibbar pro Aufruf): zügiger Fußgänger, lieber laufen als umsteigen
 WALK_SPEED_KMH = float(os.environ.get("WALK_SPEED_KMH", "5.5"))
 MAX_WALK_MINUTES = int(os.environ.get("MAX_WALK_MINUTES", "30"))
@@ -57,7 +61,8 @@ mcp = MCPServer(
         "liefern Fußwege als Karte und GPX (z. B. für Komoot) – unter 'walks' jeder Fußweg als eigene "
         "GPX-Datei zum Navigieren; diese Links dem Nutzer einzeln nennen. Antworten mit 'warnings' bzw. "
         "'timetable_hint' unbedingt an den Nutzer weitergeben – Fahrpläne liegen je nach Land oft nur "
-        "Tage oder wenige Wochen im Voraus vor. Preise und Flüge gibt es hier nicht. "
+        "Tage oder wenige Wochen im Voraus vor. Flüge gibt es hier nicht; Preise nur für die Deutsche Bahn "
+        "über transit_db_prices (eigene DB-Suche, nur Deutschland bzw. DB-Tarif). "
         f"Fehler beginnen mit einem festen Code, z. B. 'PLACE_NOT_FOUND: …'. Mögliche Codes: {', '.join(E.ALL)}."
     ),
 )
@@ -74,7 +79,7 @@ def tool(fn):
             error = e
         except Exception as e:
             logging.exception("Unerwarteter Fehler in %s", fn.__name__)
-            error = TransitError(E.UPSTREAM_ERROR, f"Unerwartete Antwort von Transitous ({type(e).__name__})")
+            error = TransitError(E.UPSTREAM_ERROR, f"Unerwartete Antwort vom Datendienst ({type(e).__name__})")
         return CallToolResult(
             content=[TextContent(type="text", text=str(error))],
             structured_content={"error": {"code": error.code, "message": error.message}},
@@ -369,6 +374,81 @@ async def transit_departures(
     if not items:
         out["note"] = "Keine Fahrten gefunden – evtl. fährt dort zu der Zeit nichts oder es fehlen Fahrplandaten"
     out["attribution"] = ATTRIBUTION
+    return out
+
+
+# ---------- Preise (Deutsche Bahn) ----------
+
+async def _db_station(spec: str) -> dict:
+    """Bahnhofsname über die DB-Suche; Koordinaten, IATA-Codes und 'stop:'-refs über die nächste DB-Haltestelle."""
+    spec = spec.strip()
+    if _COORDS.match(spec) or _IATA.match(spec) or spec.startswith("stop:"):
+        p = await places.resolve(spec)
+        found = await dbapi.nearby(p.lat, p.lon)
+    else:
+        found = await dbapi.stations(spec)
+    if not found:
+        raise TransitError(E.PLACE_NOT_FOUND, f"Kein Bahnhof/keine Haltestelle bei der DB gefunden für: {spec}")
+    return found[0]
+
+
+@tool
+async def transit_db_prices(
+    origin: str,
+    destination: str,
+    time: str | None = None,
+    arrive_by: bool = False,
+    transport: Literal["all", "regional", "no_ice"] = "all",
+    deutschland_ticket: bool = False,
+    bahncard: Literal["none", "25", "50"] = "none",
+    first_class: bool = False,
+    fares: bool = False,
+    max_transfers: int | None = None,
+    results: int = 4,
+) -> dict:
+    """Bahnpreise der Deutschen Bahn für Verbindungen (vor allem innerhalb Deutschlands) – eigene Suche bei der DB.
+
+    origin/destination: Bahnhofsname (z. B. 'Osnabrück Hbf'), 'lat,lon' oder IATA-Code (nächste Haltestelle).
+    time: Ortszeit Deutschland, z. B. '2026-11-07T10:00', leer = jetzt; arrive_by=true = späteste Ankunft.
+    transport: all; regional = nur Nahverkehr; no_ice = ohne ICE.
+    deutschland_ticket=true: Nahverkehrsabschnitte gelten als bezahlt, der Preis ist dann nur der Fernverkehrsteil.
+    Mit Schwerbehindertenausweis und Wertmarke ist Nahverkehr kostenlos – dafür ebenfalls deutschland_ticket=true.
+    price_from ist der günstigste Preis (meist Super Sparpreis mit Zugbindung, kann sich ändern);
+    fares=true liefert pro Verbindung zusätzlich Super Sparpreis/Sparpreis/Flexpreis bzw. den Verbundtarif.
+    Nur für Preise – Verspätungen und Ausfälle kommen aus transit_journey_plan/transit_departures.
+    Die DB-Ortssuche ist unscharf – die aufgelösten Namen in origin/destination prüfen.
+    Preise ohne Gewähr; inoffizielle Schnittstelle, die DB blockt/drosselt gelegentlich (sparsam aufrufen).
+    """
+    if not 1 <= results <= 6:
+        raise TransitError(E.INVALID_ARGUMENT, "results muss zwischen 1 und 6 liegen")
+    o, d = await _db_station(origin), await _db_station(destination)
+    when = I.parse_time(time, "Europe/Berlin")
+    tv = D.traveller(bahncard, first_class, deutschland_ticket)
+    data = await dbapi.journeys(o["locationId"], d["locationId"], when, arrive_by, tv, D.PRODUCTS[transport], max_transfers)
+    items = []
+    for j in (data.get("verbindungen") or [])[:results]:
+        item = D.compact(j)
+        # Verbund-Verbindungen haben in der Suche keinen Preis – dann die Tarife einzeln abfragen
+        if fares or "price_from" not in item:
+            try:
+                found = D.fares(await dbapi.offers(j["verbindung"]["kontext"], tv), first_class)
+            except TransitError:
+                found = []
+            if found:
+                item["fares"] = found
+                item.setdefault("price_from", {k: v for k, v in min(found, key=lambda f: f["amount"]).items()
+                                               if k != "name"})
+        items.append(item)
+    out = {
+        "origin": o["name"], "destination": d["name"], "time": when.strftime("%Y-%m-%d %H:%M"), "arrive_by": arrive_by,
+        "traveller": {"bahncard": bahncard, "class": 1 if first_class else 2, "deutschland_ticket": deutschland_ticket},
+        "journeys": items,
+    }
+    if not items:
+        out["note"] = "Keine Verbindung bei der DB gefunden"
+    elif any("price_from" not in i for i in items):
+        out["note"] = "Für manche Verbindungen nennt die DB keinen Preis (z. B. Auslandsstrecken) – auf bahn.de prüfen"
+    out["attribution"] = D.ATTRIBUTION
     return out
 
 

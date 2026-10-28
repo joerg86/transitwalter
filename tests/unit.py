@@ -84,5 +84,23 @@ check("IATA erkannt", _IATA.match("NCE")[1] == "NCE" and _IATA.match("airport:TL
 check("Flughafenliste geladen", {"DTM", "NCE", "LTN", "TLL", "BSL"} <= set(airports()), len(airports()))
 check("Akzente entfernt", plain("Aéroport Lennujaam") == "aeroport lennujaam")
 
+# DB-Preise (Aufbau wie Antworten des DB Navigators)
+from transitwalter import db as D
+check("BahnCard im Reisendenprofil", D.traveller("25")["reisendenProfil"]["reisende"][0]["ermaessigungen"] == ["BAHNCARD25 KLASSE_2"])
+check("D-Ticket im Reisendenprofil", D.traveller(deutschland_ticket=True)["fahrverguenstigungen"]["deutschlandTicketVorhanden"])
+check("Ab-Preis", D.price_from({"preise": {"istTeilpreis": True, "gesamt": {"ab": {"waehrung": "EUR", "betrag": 25.8}}}})
+      == {"amount": 25.8, "currency": "EUR", "partial": True})
+check("Kein Preis", D.price_from({"verbundCode": "555", "angebotsCluster": []}) is None)
+pos = lambda name, eur, cls="KLASSE_2": {"reisePosition": {"reisePosition": {
+    "name": name, "preis": {"waehrung": "EUR", "betrag": eur}, "nutzungsInformationen": [{"klasse": cls}]}}}
+recon = {"angebote": {"angebotsCluster": [{"angebotsSubCluster": [{"angebotsPositionen": [
+    {"einfacheFahrt": {"standard": pos("Super Sparpreis", 18.99)}},
+    {"einfacheFahrt": {"standard": pos("Flexpreis", 84.4, "KLASSE_1")}},
+    {"einfacheFahrt": {"standard": pos("Flexpreis", 45.6)}},
+]}]}, {"angebotsSubCluster": [{"angebotsPositionen": [
+    {"verbundAngebot": pos("EinzelTicket", 25.7)}, {"verbundAngebot": pos("KinderTicket", 8.1)}, {"aboAngebot": {}},
+]}]}]}}
+f = D.fares(recon)
+check("Tarife 2. Klasse, je Verbund nur das erste Angebot", [x["name"] for x in f] == ["Super Sparpreis", "Flexpreis", "EinzelTicket"], f)
 print(f"\n{'Alles ok' if not failed else f'{failed} Fehler'}")
 sys.exit(1 if failed else 0)

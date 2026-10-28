@@ -2,13 +2,14 @@
 
 Selbst gehosteter MCP-Server für ÖPNV-Verbindungen weltweit – vom Flughafen zum Trailhead und zurück.
 
-Daten kommen von [Transitous](https://transitous.org) (öffentliche MOTIS-API, offene Fahrplandaten aus vielen Ländern + OpenStreetMap). Keine Preise, keine Flüge – dafür gibt es eigene MCPs. Läuft als Docker-Container mit Streamable-HTTP und Bearer-Token, z. B. auf einem Homeserver hinter einem Cloudflare-Tunnel.
+Daten kommen von [Transitous](https://transitous.org) (öffentliche MOTIS-API, offene Fahrplandaten aus vielen Ländern + OpenStreetMap). Keine Flüge – dafür gibt es eigene MCPs. Bahnpreise gibt es für die Deutsche Bahn über die (inoffizielle) Schnittstelle des DB Navigators. Läuft als Docker-Container mit Streamable-HTTP und Bearer-Token, z. B. auf einem Homeserver hinter einem Cloudflare-Tunnel.
 
 ## Tools
 
 | Tool | |
 |---|---|
 | `transit_journey_plan` | Verbindungen von A nach B inkl. Fußwegen, Abfahrt oder späteste Ankunft (`arrive_by`), Verkehrsmittel-Auswahl, Zwischenhalt (`via`), max. Fußweg, Gehtempo |
+| `transit_db_prices` | Preise der Deutschen Bahn (ab-Preis, auf Wunsch Super Sparpreis/Sparpreis/Flexpreis bzw. Verbundtarif), BahnCard, 1. Klasse, mit Deutschlandticket/Schwerbehindertenausweis nur der Fernverkehrsteil |
 | `transit_departures` | Abfahrten/Ankünfte an einer Haltestelle – „wann fährt der letzte Bus vom Trail?“ |
 | `transit_walk_route` | reiner Fußweg mit Dauer, Strecke, Straßen + Karte und GPX |
 | `transit_export` | Fußwege (oder alles) einer geplanten Verbindung als Karte und GPX – jeder Fußweg auch als eigene GPX-Datei zum Navigieren |
@@ -41,6 +42,14 @@ Karten und GPX liegen unter `/x/<zufällige-id>` (ohne Token erreichbar, 90 Tage
 
 - **Fahrplan noch nicht veröffentlicht:** Liegt das Datum ≥ 5 Tage in der Zukunft, wird zusätzlich derselbe Wochentag in den nächsten Tagen abgefragt. Ist das Ergebnis dort deutlich besser, steht ein `timetable_hint` in der Antwort. Beispiel Estland: Elron-Züge sind nur wenige Tage im Voraus drin, sonst kommen 3–7 h Busfahrt statt 1 h Zug.
 - **Pro Verbindung** (`warnings`): lange Wartezeiten, Übernachtungen, lange Fußwege, ausgefallene Fahrten, widersprüchliche Daten (Anschluss fährt vor der Ankunft ab).
+
+### Echtzeit
+
+Wo die Verkehrsverbünde Echtzeitdaten an Transitous liefern (in Deutschland flächendeckend, in vielen anderen Ländern nicht), stehen in `transit_journey_plan` und `transit_departures` Verspätungen (`delay_min`) und Ausfälle (`cancelled`).
+
+### DB-Preise
+
+`transit_db_prices` sucht selbst bei der DB (andere Ortssuche, andere Verbindungen als Transitous). `price_from` ist der günstigste Preis der Suche, meist ein Super Sparpreis mit Zugbindung; Verbund-Verbindungen ohne Preis in der Suche werden einzeln nachgefragt. `deutschland_ticket=true` rechnet Nahverkehrsabschnitte als bezahlt – passt auch für Schwerbehindertenausweis mit Wertmarke. Die Schnittstelle ist inoffiziell ([db-vendo-client](https://github.com/public-transport/db-vendo-client) nutzt dieselbe), ohne Gewähr; die DB blockt manche Clients (z. B. curl, User-Agents mit URL) und drosselt schnell (`DB_USER_AGENT`, `DB_REQUESTS_PER_MINUTE`, Standard 10). Antworten werden 10 min gecacht.
 
 ## Fehlercodes
 
