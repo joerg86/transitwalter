@@ -1,0 +1,16 @@
+services:
+  transitwalter:
+    build: .
+    container_name: transitwalter
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      TZ: Europe/Berlin
+    volumes:
+      - transitwalter-data:/data
+    ports:
+      # Tunnel bzw. Reverse Proxy erreicht ihn über host.docker.internal:8766
+      - "8766:8000"
+
+volumes:
+  transitwalter-data:

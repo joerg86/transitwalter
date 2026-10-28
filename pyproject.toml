@@ -1,0 +1,22 @@
+[project]
+name = "transitwalter"
+version = "0.1.0"
+description = "Selbst gehosteter MCP-Server für ÖPNV-Verbindungen weltweit über Transitous"
+authors = [
+    { name = "Jörg Sawatzki", email = "198429+joerg86@users.noreply.github.com" }
+]
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "mcp[cli]>=2.3.0",
+    "tzdata>=2025.2",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+transitwalter = "transitwalter:main"
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
