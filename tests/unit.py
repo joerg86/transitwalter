@@ -84,5 +84,41 @@ check("IATA erkannt", _IATA.match("NCE")[1] == "NCE" and _IATA.match("airport:TL
 check("Flughafenliste geladen", {"DTM", "NCE", "LTN", "TLL", "BSL"} <= set(airports()), len(airports()))
 check("Akzente entfernt", plain("Aéroport Lennujaam") == "aeroport lennujaam")
 
+# DB-Preise und Echtzeit (Aufbau wie Antworten des DB Navigators)
+from transitwalter import db as D
+check("BahnCard im Reisendenprofil", D.traveller("25")["reisendenProfil"]["reisende"][0]["ermaessigungen"] == ["BAHNCARD25 KLASSE_2"])
+check("D-Ticket im Reisendenprofil", D.traveller(deutschland_ticket=True)["fahrverguenstigungen"]["deutschlandTicketVorhanden"])
+check("Ab-Preis", D.price_from({"preise": {"istTeilpreis": True, "gesamt": {"ab": {"waehrung": "EUR", "betrag": 25.8}}}})
+      == {"amount": 25.8, "currency": "EUR", "partial": True})
+check("Kein Preis", D.price_from({"verbundCode": "555", "angebotsCluster": []}) is None)
+pos = lambda name, eur, cls="KLASSE_2": {"reisePosition": {"reisePosition": {
+    "name": name, "preis": {"waehrung": "EUR", "betrag": eur}, "nutzungsInformationen": [{"klasse": cls}]}}}
+recon = {"angebote": {"angebotsCluster": [{"angebotsSubCluster": [{"angebotsPositionen": [
+    {"einfacheFahrt": {"standard": pos("Super Sparpreis", 18.99)}},
+    {"einfacheFahrt": {"standard": pos("Flexpreis", 84.4, "KLASSE_1")}},
+    {"einfacheFahrt": {"standard": pos("Flexpreis", 45.6)}},
+]}]}, {"angebotsSubCluster": [{"angebotsPositionen": [
+    {"verbundAngebot": pos("EinzelTicket", 25.7)}, {"verbundAngebot": pos("KinderTicket", 8.1)}, {"aboAngebot": {}},
+]}]}]}}
+f = D.fares(recon)
+check("Tarife 2. Klasse, je Verbund nur das erste Angebot", [x["name"] for x in f] == ["Super Sparpreis", "Flexpreis", "EinzelTicket"], f)
+ride = {"typ": "FAHRZEUG", "mitteltext": "RE 2", "kurztext": "RE", "abschnittsDauer": 2520,
+        "halte": [{"abgangsDatum": "2026-11-05T09:41:00+01:00", "ezAbgangsDatum": "2026-11-05T09:48:00+01:00",
+                   "gleis": "3", "ezGleis": "4", "ort": {"name": "Osnabrück Hbf"}},
+                  {"ankunftsDatum": "2026-11-05T10:23:00+01:00", "ort": {"name": "Münster(Westf)Hbf"},
+                   "echtzeitNotizen": [{"text": "Halt entfällt"}]}],
+        "himNotizen": [{"prioritaet": "HOCH", "text": "Bauarbeiten"}]}
+c = D.compact({"verbindung": {"reiseDauer": 2520, "umstiegeAnzahl": 0, "verbindungsAbschnitte": [ride]}, "angebote": {}})
+l = c["legs"][0]
+check("Echtzeit: Verspätung, Gleis, Ausfall, Meldung", l.get("departure_delay_min") == 7 and l.get("platform_change") == "Gleis 4 statt 3"
+      and c.get("cancelled") and l.get("notes") == ["Bauarbeiten"], l)
+
+w = D.connection_warnings([
+    {"line": "RE 2", "from": "A", "to": "B", "departure": "2026-11-05 09:00", "arrival": "2026-11-05 10:00", "arrival_delay_min": 12},
+    {"line": "Fußweg", "from": "B", "to": "B Gl. 11", "minutes": 5},
+    {"line": "ICE 106", "from": "B Gl. 11", "to": "C", "departure": "2026-11-05 10:10", "arrival": "2026-11-05 12:00", "cancelled": True},
+])
+check("Anschluss gefährdet und Ausfall", len(w) == 2 and "gefährdet: -2 min statt 5 min" in w[1], w)
+
 print(f"\n{'Alles ok' if not failed else f'{failed} Fehler'}")
 sys.exit(1 if failed else 0)
