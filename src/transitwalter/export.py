@@ -88,7 +88,7 @@ def gpx(title: str, legs: list[dict]) -> str:
 
 def geojson(legs: list[dict], walk_files: dict[int, str]) -> dict:
     return {"type": "FeatureCollection", "features": [
-        {"type": "Feature", "properties": {"title": leg_title(leg), "mode": leg["mode"], "gpx": walk_files.get(i)},
+        {"type": "Feature", "properties": {"i": i, "title": leg_title(leg), "mode": leg["mode"], "gpx": walk_files.get(i)},
          "geometry": {"type": "LineString", "coordinates": [[lo, la] for la, lo in leg_points(leg)]}}
         for i, leg in enumerate(legs)
     ]}
@@ -101,25 +101,52 @@ MAP_PAGE = """<!doctype html><html lang="de"><head><meta charset="utf-8">
 <style>html,body{{margin:0;height:100%;font:14px system-ui,sans-serif}}#map{{position:absolute;inset:0}}
 #box{{position:absolute;z-index:1000;top:10px;left:50px;right:10px;max-width:520px;background:#fff;padding:8px 12px;
 border-radius:8px;box-shadow:0 1px 4px #0004}}#box a{{margin-right:12px}}#box ol{{margin:6px 0;padding-left:20px}}
-#box li{{margin:3px 0}}</style></head><body>
+#box li{{margin:3px 0}}#box li a.zoom{{margin:0;color:inherit}}</style></head><body>
 <div id="map"></div><div id="box"><b>{title}</b>{walks}<a href="{gpx}" download>Alles als GPX</a>
-<small>für Komoot: Planen → GPX importieren</small></div>
+<a href="#" id="all">Gesamtansicht</a><small>für Komoot: Planen → GPX importieren</small></div>
 <script>
 const data = {data};
 const map = L.map('map');
 L.tileLayer('https://tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{maxZoom: 19,
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>-Mitwirkende'}}).addTo(map);
 // erst den Ausschnitt setzen, dann die Linien einfügen – sonst zeichnet Leaflet sie nicht
+const style = f => f.properties.mode === 'WALK' ? {{color: '#d62728', weight: 5, dashArray: '6 6'}} : {{color: '#1f77b4', weight: 4}};
+const parts = {{}};
+const hits = L.layerGroup();
 const layer = L.geoJSON(data, {{
-  style: f => f.properties.mode === 'WALK' ? {{color: '#d62728', weight: 5, dashArray: '6 6'}} : {{color: '#1f77b4', weight: 4}},
-  onEachFeature: (f, l) => l.bindPopup(f.properties.title +
-    (f.properties.gpx ? `<br><a href="${{f.properties.gpx}}" download>GPX für diesen Fußweg</a>` : ''))
+  style,
+  onEachFeature: (f, l) => {{
+    parts[f.properties.i] = l;
+    l.bindPopup(f.properties.title +
+      (f.properties.gpx ? `<br><a href="${{f.properties.gpx}}" download>GPX für diesen Fußweg</a>` : ''));
+    // dünne, gestrichelte Linien sind schwer zu treffen (in den Lücken gar nicht) –
+    // darunter liegt eine unsichtbare, breite Klickfläche
+    const hit = L.polyline(l.getLatLngs(), {{weight: 24, opacity: 0}}).addTo(hits);
+    for (const t of [l, hit]) {{
+      t.on('click', () => zoomTo(f.properties.i, true));
+      t.on('mouseover', () => l.setStyle({{weight: 9}}));
+      t.on('mouseout', () => l.setStyle(style(f)));
+    }}
+  }}
 }});
+// Abstand oben so groß wie der Infokasten, damit nichts darunter verschwindet
+const pad = () => ({{paddingTopLeft: [40, document.getElementById('box').offsetHeight + 30], paddingBottomRight: [40, 40]}});
+// Klick auf Linie oder Listeneintrag: auf diesen Abschnitt zoomen
+function zoomTo(i, popup) {{
+  touched = true;
+  map.fitBounds(parts[i].getBounds(), {{...pad(), maxZoom: 18}});
+  if (popup) map.once('moveend', () => parts[i].openPopup());
+}}
+document.querySelectorAll('a.zoom').forEach(a => a.addEventListener('click', e => {{
+  e.preventDefault(); zoomTo(+a.dataset.leg, true);
+}}));
+document.getElementById('all').addEventListener('click', e => {{ e.preventDefault(); touched = false; fit(); }});
 // Ausschnitt neu berechnen, solange niemand selbst zoomt – beim ersten Aufruf ist das Fenster evtl. noch 0×0
 let touched = false;
-const fit = () => {{ if (touched) return; map.invalidateSize(); map.fitBounds(layer.getBounds(), {{padding: [40, 40], maxZoom: 17}}); }};
+const fit = () => {{ if (touched) return; map.invalidateSize(); map.fitBounds(layer.getBounds(), {{...pad(), maxZoom: 17}}); }};
 fit();
 layer.addTo(map);
+hits.addTo(map);
 map.on('mousedown touchstart wheel', () => {{ touched = true; }});
 window.addEventListener('load', fit);
 window.addEventListener('resize', fit);
@@ -151,7 +178,8 @@ class Exports:
             walk_files[i] = file
             km, minutes = round((leg.get("distance") or 0) / 1000, 1), round(leg["duration"] / 60)
             walks.append({"name": name, "distance_km": km, "minutes": minutes, "gpx_url": f"{self.base_url}/x/{file}"})
-            items.append(f'<li>{html.escape(name)} ({km} km, {minutes} min) – <a href="{file}" download>GPX</a></li>')
+            items.append(f'<li><a href="#" class="zoom" data-leg="{i}" title="Auf diesen Fußweg zoomen">'
+                         f'{html.escape(name)}</a> ({km} km, {minutes} min) – <a href="{file}" download>GPX</a></li>')
         (self.dir / f"{eid}.json").write_text(json.dumps(names), encoding="utf-8")
         page = MAP_PAGE.format(title=html.escape(title), gpx=f"{eid}.gpx",
                                walks=f"<ol>{''.join(items)}</ol>" if items else "<br>",
