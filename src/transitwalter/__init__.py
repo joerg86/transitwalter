@@ -3,8 +3,8 @@
 Verbindungen, Abfahrten und Fußwege weltweit über die öffentliche MOTIS-API von
 Transitous (offene Fahrplandaten + OpenStreetMap). Flughäfen per IATA-Code mit
 Haltestelle am Terminal, Warnungen bei unplausiblen Verbindungen und fehlenden
-Fahrplandaten, Fußwege als GPX/Karte. Für Deutschland zusätzlich Bahnpreise über die
-(inoffizielle) Schnittstelle des DB Navigators.
+Fahrplandaten, Fußwege als GPX/Karte. Dazu Bahnpreise über die (inoffizielle) Schnittstelle
+des DB Navigators – in Deutschland, grenzüberschreitend und für viele Strecken im europäischen Ausland.
 """
 
 import functools
@@ -41,6 +41,7 @@ dbapi = D.DB(os.environ.get("DB_USER_AGENT", "transitwalter/0.1"),
 # Persönliche Standards (überschreibbar pro Aufruf): zügiger Fußgänger, lieber laufen als umsteigen
 WALK_SPEED_KMH = float(os.environ.get("WALK_SPEED_KMH", "5.5"))
 MAX_WALK_MINUTES = int(os.environ.get("MAX_WALK_MINUTES", "30"))
+DB_BAHNCARD = os.environ.get("DB_BAHNCARD", "none")  # none | 25 | 50
 exports = Exports(os.environ.get("DATA_DIR", "data"), os.environ.get("PUBLIC_BASE_URL", "http://localhost:8000"))
 
 # Zuletzt geplante Verbindungen (Rohdaten) für transit_export
@@ -61,8 +62,10 @@ mcp = MCPServer(
         "liefern Fußwege als Karte und GPX (z. B. für Komoot) – unter 'walks' jeder Fußweg als eigene "
         "GPX-Datei zum Navigieren; diese Links dem Nutzer einzeln nennen. Antworten mit 'warnings' bzw. "
         "'timetable_hint' unbedingt an den Nutzer weitergeben – Fahrpläne liegen je nach Land oft nur "
-        "Tage oder wenige Wochen im Voraus vor. Flüge gibt es hier nicht; Preise nur für die Deutsche Bahn "
-        "über transit_db_prices (eigene DB-Suche, nur Deutschland bzw. DB-Tarif). "
+        "Tage oder wenige Wochen im Voraus vor. Flüge gibt es hier nicht. Bahnpreise liefert transit_db_prices (Tarife der DB) – nicht nur in "
+        "Deutschland, sondern auch grenzüberschreitend und für viele reine Auslandsstrecken in Europa (z. B. "
+        "Wien–Venedig, Kopenhagen–Stockholm, Zürich–Mailand); für Bahnpreise in Europa also immer zuerst dort "
+        "fragen. Fehlt bei einer Verbindung der Preis, verkauft die DB sie nicht – dann beim Betreiber im Land schauen. "
         f"Fehler beginnen mit einem festen Code, z. B. 'PLACE_NOT_FOUND: …'. Mögliche Codes: {', '.join(E.ALL)}."
     ),
 )
@@ -377,7 +380,7 @@ async def transit_departures(
     return out
 
 
-# ---------- Preise (Deutsche Bahn) ----------
+# ---------- Bahnpreise (Tarife der DB) ----------
 
 async def _db_station(spec: str) -> dict:
     """Bahnhofsname über die DB-Suche; Koordinaten, IATA-Codes und 'stop:'-refs über die nächste DB-Haltestelle."""
@@ -392,6 +395,16 @@ async def _db_station(spec: str) -> dict:
     return found[0]
 
 
+async def _station_tz(station: dict) -> str:
+    """Zeitzone eines DB-Bahnhofs (über Transitous, 1 Tag gecacht) – Eingabezeiten gelten als Ortszeit."""
+    c = station.get("coordinates") or {}
+    try:
+        near = await api.reverse_geocode(c["latitude"], c["longitude"])
+        return near[0].get("tz") or "Europe/Berlin"
+    except (KeyError, IndexError, TransitError):
+        return "Europe/Berlin"
+
+
 @tool
 async def transit_db_prices(
     origin: str,
@@ -400,16 +413,20 @@ async def transit_db_prices(
     arrive_by: bool = False,
     transport: Literal["all", "regional", "no_ice"] = "all",
     deutschland_ticket: bool = False,
-    bahncard: Literal["none", "25", "50"] = "none",
+    bahncard: Literal["none", "25", "50"] | None = None,
     first_class: bool = False,
     fares: bool = False,
     max_transfers: int | None = None,
     results: int = 4,
 ) -> dict:
-    """Bahnpreise der Deutschen Bahn für Verbindungen (vor allem innerhalb Deutschlands) – eigene Suche bei der DB.
+    """Bahnpreise (Tarife der DB) für Verbindungen in Deutschland, grenzüberschreitend und für viele
+    Strecken im europäischen Ausland (z. B. Wien–Venedig, Kopenhagen–Stockholm) – eigene Suche bei der DB.
 
-    origin/destination: Bahnhofsname (z. B. 'Osnabrück Hbf'), 'lat,lon' oder IATA-Code (nächste Haltestelle).
-    time: Ortszeit Deutschland, z. B. '2026-11-07T10:00', leer = jetzt; arrive_by=true = späteste Ankunft.
+    origin/destination: Bahnhofsname (z. B. 'Osnabrück Hbf', 'Wien Hbf'), 'lat,lon' oder IATA-Code (nächste Haltestelle).
+    time: Ortszeit des Startbahnhofs (bei arrive_by des Ziels), z. B. '2026-11-07T10:00', leer = jetzt.
+    bahncard: none, 25 oder 50; leer = Standard des Servers (die BahnCard des Nutzers) – gilt im Ausland oft nicht.
+    Fehlt bei einer Verbindung price_from, verkauft die DB sie nicht (z. B. viele Strecken in Frankreich,
+    Eurostar) – dann beim Betreiber im Land nachsehen.
     transport: all; regional = nur Nahverkehr; no_ice = ohne ICE.
     deutschland_ticket=true: Nahverkehrsabschnitte gelten als bezahlt, der Preis ist dann nur der Fernverkehrsteil.
     Mit Schwerbehindertenausweis und Wertmarke ist Nahverkehr kostenlos – dafür ebenfalls deutschland_ticket=true.
@@ -421,8 +438,9 @@ async def transit_db_prices(
     """
     if not 1 <= results <= 6:
         raise TransitError(E.INVALID_ARGUMENT, "results muss zwischen 1 und 6 liegen")
+    bahncard = bahncard or DB_BAHNCARD
     o, d = await _db_station(origin), await _db_station(destination)
-    when = I.parse_time(time, "Europe/Berlin")
+    when = I.parse_time(time, await _station_tz(d if arrive_by else o))
     tv = D.traveller(bahncard, first_class, deutschland_ticket)
     data = await dbapi.journeys(o["locationId"], d["locationId"], when, arrive_by, tv, D.PRODUCTS[transport], max_transfers)
     items = []
@@ -447,7 +465,8 @@ async def transit_db_prices(
     if not items:
         out["note"] = "Keine Verbindung bei der DB gefunden"
     elif any("price_from" not in i for i in items):
-        out["note"] = "Für manche Verbindungen nennt die DB keinen Preis (z. B. Auslandsstrecken) – auf bahn.de prüfen"
+        out["note"] = ("Für manche Verbindungen nennt die DB keinen Preis – die verkauft sie nicht; "
+                       "Preis beim Betreiber im Land prüfen")
     out["attribution"] = D.ATTRIBUTION
     return out
 
