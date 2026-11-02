@@ -57,7 +57,8 @@ mcp = MCPServer(
         "(z. B. '2026-11-07T10:00'), Ausgaben ebenfalls in Ortszeit der jeweiligen Haltestelle. "
         "Wer in Deutschland mit Schwerbehindertenausweis, Deutschlandticket o. Ä. fährt, nutzt "
         "transport='regional' (ohne IC/ICE und Fernbusse; Sonderbusse mit eigenem Tarif wie Flughafen-Expressbusse "
-        "erkennt der Filter nicht). Für Wanderungen: max_walk_minutes erhöhen, wenn der Start/das Ziel abseits liegt; "
+        "erkennt der Filter nicht) – aber nur innerhalb Deutschlands: Bei Fahrten ins Ausland transport='all', "
+        "dort sind Intercitys oft normale Züge (z. B. NS-IC Venlo–Eindhoven). Für Wanderungen: max_walk_minutes erhöhen, wenn der Start/das Ziel abseits liegt; "
         "transit_departures zeigt, wann der letzte Bus fährt; transit_walk_route und transit_export "
         "liefern Fußwege als Karte und GPX (z. B. für Komoot) – unter 'walks' jeder Fußweg als eigene "
         "GPX-Datei zum Navigieren; diese Links dem Nutzer einzeln nennen. Antworten mit 'warnings' bzw. "
@@ -427,7 +428,10 @@ async def transit_db_prices(
     bahncard: none, 25 oder 50; leer = Standard des Servers (die BahnCard des Nutzers) – gilt im Ausland oft nicht.
     Fehlt bei einer Verbindung price_from, verkauft die DB sie nicht (z. B. viele Strecken in Frankreich,
     Eurostar) – dann beim Betreiber im Land nachsehen.
-    transport: all; regional = nur Nahverkehr; no_ice = ohne ICE.
+    transport: all (Standard, auch für alles mit Auslandsanteil); regional = nur Nahverkehr; no_ice = ohne ICE.
+    regional nur für Fahrten innerhalb Deutschlands (Schwerbehindertenausweis, Deutschlandticket) – im Ausland
+    sind Intercitys oft normale Züge ohne Aufpreis (z. B. NS-IC Venlo–Eindhoven); mit regional sucht die DB
+    dann Umwege, für die sie keinen Preis kennt.
     deutschland_ticket=true: Nahverkehrsabschnitte gelten als bezahlt, der Preis ist dann nur der Fernverkehrsteil.
     Mit Schwerbehindertenausweis und Wertmarke ist Nahverkehr kostenlos – dafür ebenfalls deutschland_ticket=true.
     price_from ist der günstigste Preis (meist Super Sparpreis mit Zugbindung, kann sich ändern);
@@ -467,6 +471,10 @@ async def transit_db_prices(
     elif any("price_from" not in i for i in items):
         out["note"] = ("Für manche Verbindungen nennt die DB keinen Preis – die verkauft sie nicht; "
                        "Preis beim Betreiber im Land prüfen")
+        if transport != "all":
+            out["note"] = (f"Ohne Preis mit transport='{transport}': Bei Strecken ins Ausland schließt der Filter "
+                           "dort normale Intercitys aus, die DB findet dann Umwege ohne Preis – mit transport='all' "
+                           "erneut fragen. Sonst: " + out["note"])
     out["attribution"] = D.ATTRIBUTION
     return out
 
