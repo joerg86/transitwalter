@@ -433,7 +433,10 @@ async def transit_db_prices(
     sind Intercitys oft normale Züge ohne Aufpreis (z. B. NS-IC Venlo–Eindhoven); mit regional sucht die DB
     dann Umwege, für die sie keinen Preis kennt.
     deutschland_ticket=true: Nahverkehrsabschnitte gelten als bezahlt, der Preis ist dann nur der Fernverkehrsteil.
-    Mit Schwerbehindertenausweis und Wertmarke ist Nahverkehr kostenlos – dafür ebenfalls deutschland_ticket=true.
+    Mit Schwerbehindertenausweis und Wertmarke ist Nahverkehr kostenlos – dafür ebenfalls deutschland_ticket=true,
+    aber nur für Fahrten innerhalb Deutschlands: Der Ausweis gilt nur bis zur Grenze (z. B. bis Kaldenkirchen),
+    das Deutschlandticket teils bis in Grenzbahnhöfe (z. B. Venlo). Bei Fahrten ins Ausland mit Ausweis deshalb
+    deutschland_ticket=false und den Preis ab dem letzten deutschen Bahnhof abfragen.
     price_from ist der günstigste Preis (meist Super Sparpreis mit Zugbindung, kann sich ändern);
     fares=true liefert pro Verbindung zusätzlich Super Sparpreis/Sparpreis/Flexpreis bzw. den Verbundtarif.
     Nur für Preise – Verspätungen und Ausfälle kommen aus transit_journey_plan/transit_departures.
