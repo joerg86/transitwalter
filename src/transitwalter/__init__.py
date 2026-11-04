@@ -8,7 +8,6 @@ des DB Navigators – in Deutschland, grenzüberschreitend und für viele Streck
 """
 
 import functools
-import hmac
 import logging
 import os
 import secrets
@@ -482,14 +481,15 @@ async def transit_db_prices(
     return out
 
 
-# ---------- HTTP-Server mit Token ----------
+# ---------- HTTP-Server hinter dem Walterpass ----------
 
-class BearerAuth:
-    """Lässt nur Requests mit 'Authorization: Bearer <MCP_TOKEN>' durch – außer /health und Exporten (/x/…)."""
+class WalterUser:
+    """Lässt nur Requests mit 'X-Walter-User' durch – außer /health und Exporten (/x/…). Den Header setzt Caddy,
+    nachdem walterpass das Token geprüft hat (ein von außen mitgeschickter wird dort verworfen); deshalb ist
+    transitwalter nur über Caddy erreichbar, ohne veröffentlichten Port."""
 
-    def __init__(self, app, token: str):
+    def __init__(self, app):
         self.app = app
-        self.expected = f"Bearer {token}".encode()
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
@@ -506,9 +506,8 @@ class BearerAuth:
                 extra = [(b"content-disposition", f'attachment; filename="{filename}"'.encode())] if filename else []
                 await _respond(send, 200, body, ctype.encode(), extra)
                 return
-            auth = dict(scope["headers"]).get(b"authorization", b"")
-            if not hmac.compare_digest(auth, self.expected):
-                await _respond(send, 401, b"unauthorized")
+            if not dict(scope["headers"]).get(b"x-walter-user"):
+                await _refuse(scope, send)
                 return
         await self.app(scope, receive, send)
 
@@ -519,12 +518,21 @@ async def _respond(send, status: int, body: bytes, ctype: bytes = b"text/plain",
     await send({"type": "http.response.body", "body": body})
 
 
+def _refuse(scope, send):
+    """Ohne Nutzer: 403, wenn angemeldet, aber dieser Walter nicht freigegeben ist (X-Walter-Denied), sonst 401
+    mit dem Hinweis auf die Resource-Metadaten, über die MCP-Clients den Login bei Pocket ID finden."""
+    headers = dict(scope["headers"])
+    denied = headers.get(b"x-walter-denied", b"").decode()
+    if denied:
+        return _respond(send, 403, f"Dein Walterpass gilt nicht für {denied}. Frag Jörg nach einer Freigabe.".encode())
+    host = headers.get(b"host", b"").decode().split(":")[0]
+    meta = f'Bearer resource_metadata="https://{host}/.well-known/oauth-protected-resource"'
+    return _respond(send, 401, b"Walterpass erforderlich", extra=[(b"www-authenticate", meta.encode())])
+
+
 def main() -> None:
-    token = os.environ.get("MCP_TOKEN")
-    if not token:
-        raise SystemExit("MCP_TOKEN fehlt – ohne Token starte ich nicht.")
     if not api.user_agent:
         raise SystemExit("TRANSITOUS_USER_AGENT fehlt – Transitous verlangt App-Name, Version und Kontakt.")
     # stateless + JSON-Antworten: kein SSE, das vertragen Cloudflare und Caddy am besten
     app = mcp.streamable_http_app(stateless_http=True, json_response=True, host="0.0.0.0")
-    uvicorn.run(BearerAuth(app, token), host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
+    uvicorn.run(WalterUser(app), host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))

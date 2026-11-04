@@ -2,7 +2,7 @@
 
 Selbst gehosteter MCP-Server für ÖPNV-Verbindungen weltweit – vom Flughafen zum Trailhead und zurück.
 
-Daten kommen von [Transitous](https://transitous.org) (öffentliche MOTIS-API, offene Fahrplandaten aus vielen Ländern + OpenStreetMap). Keine Flüge – dafür gibt es eigene MCPs. Bahnpreise kommen über die (inoffizielle) Schnittstelle des DB Navigators – nicht nur für Deutschland, sondern auch für grenzüberschreitende und viele reine Auslandsstrecken. Läuft als Docker-Container mit Streamable-HTTP und Bearer-Token, z. B. auf einem Homeserver hinter einem Cloudflare-Tunnel.
+Daten kommen von [Transitous](https://transitous.org) (öffentliche MOTIS-API, offene Fahrplandaten aus vielen Ländern + OpenStreetMap). Keine Flüge – dafür gibt es eigene MCPs. Bahnpreise kommen über die (inoffizielle) Schnittstelle des DB Navigators – nicht nur für Deutschland, sondern auch für grenzüberschreitende und viele reine Auslandsstrecken. Läuft als Docker-Container mit Streamable-HTTP hinter einem Reverse Proxy, der den angemeldeten Nutzer als `X-Walter-User` weitergibt (siehe DEPLOY.md), z. B. auf einem Homeserver hinter einem Cloudflare-Tunnel.
 
 ## Tools
 
@@ -64,7 +64,7 @@ Die öffentliche API ist für nicht-kommerzielle Projekte mit wenig Last gedacht
 
 ```bash
 uv sync
-cp .env.example .env               # MCP_TOKEN, TRANSITOUS_USER_AGENT eintragen
+cp .env.example .env               # TRANSITOUS_USER_AGENT eintragen; lokal ohne Proxy den Header X-Walter-User selbst schicken
 uv run python tests/unit.py        # Logik offline
 uv run --env-file .env -- env PUBLIC_BASE_URL=http://localhost:8000 DATA_DIR=data transitwalter
 uv run --env-file .env python tests/smoke.py   # zweites Terminal

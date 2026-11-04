@@ -8,9 +8,12 @@ services:
       TZ: Europe/Berlin
     volumes:
       - transitwalter-data:/data
-    ports:
-      # Tunnel bzw. Reverse Proxy erreicht ihn über host.docker.internal:8766
-      - "8766:8000"
+    # kein Port: erreichbar nur über den Reverse Proxy im Netz „walter“, der X-Walter-User setzt (Walterpass)
+    networks: [walter]
 
 volumes:
   transitwalter-data:
+
+networks:
+  walter:
+    external: true

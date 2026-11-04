@@ -2,7 +2,7 @@
 
     uv run --env-file .env python tests/smoke.py [URL]     (Standard: http://localhost:8000/mcp)
 
-Liest MCP_TOKEN aus der Umgebung. Lädt zusätzlich die erzeugte Karte und GPX-Datei.
+Setzt X-Walter-User selbst (WALTER_USER, Standard „smoke“) – also gegen den Container direkt, nicht über Caddy. Lädt zusätzlich die erzeugte Karte und GPX-Datei.
 """
 
 import asyncio
@@ -44,8 +44,7 @@ ERRORS = [
 
 
 async def main() -> int:
-    token = os.environ["MCP_TOKEN"]
-    http = create_mcp_http_client(headers={"Authorization": f"Bearer {token}"})
+    http = create_mcp_http_client(headers={"X-Walter-User": os.environ.get("WALTER_USER", "smoke")})
     failed, itinerary_id, walk_gpx, urls = 0, None, None, []
     async with http, streamable_http_client(URL, http_client=http) as (read, write, *_):
         async with ClientSession(read, write) as session:
