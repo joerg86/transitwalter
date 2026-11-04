@@ -8,6 +8,7 @@ authors = [
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
+    "walterkit @ https://github.com/joerg86/walterkit/archive/refs/tags/v1.0.0.tar.gz",
     "httpx>=0.28.1",
     "mcp[cli]>=2.3.0",
     "tzdata>=2025.2",

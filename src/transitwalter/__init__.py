@@ -18,6 +18,7 @@ from typing import Literal
 import uvicorn
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
+from walterkit import WalterUser
 
 from . import db as D
 from . import errors as E
@@ -483,10 +484,9 @@ async def transit_db_prices(
 
 # ---------- HTTP-Server hinter dem Walterpass ----------
 
-class WalterUser:
-    """Lässt nur Requests mit 'X-Walter-User' durch – außer /health und Exporten (/x/…). Den Header setzt Caddy,
-    nachdem walterpass das Token geprüft hat (ein von außen mitgeschickter wird dort verworfen); deshalb ist
-    transitwalter nur über Caddy erreichbar, ohne veröffentlichten Port."""
+class PublicPaths:
+    """Beantwortet /health und die Exporte (/x/…, ohne Login) selbst; alles andere geht an den Walterpass-Check
+    (walterkit.WalterUser: verlangt X-Walter-User, den Caddy nach der Prüfung durch walterpass setzt)."""
 
     def __init__(self, app):
         self.app = app
@@ -506,9 +506,6 @@ class WalterUser:
                 extra = [(b"content-disposition", f'attachment; filename="{filename}"'.encode())] if filename else []
                 await _respond(send, 200, body, ctype.encode(), extra)
                 return
-            if not dict(scope["headers"]).get(b"x-walter-user"):
-                await _refuse(scope, send)
-                return
         await self.app(scope, receive, send)
 
 
@@ -518,21 +515,10 @@ async def _respond(send, status: int, body: bytes, ctype: bytes = b"text/plain",
     await send({"type": "http.response.body", "body": body})
 
 
-def _refuse(scope, send):
-    """Ohne Nutzer: 403, wenn angemeldet, aber dieser Walter nicht freigegeben ist (X-Walter-Denied), sonst 401
-    mit dem Hinweis auf die Resource-Metadaten, über die MCP-Clients den Login bei Pocket ID finden."""
-    headers = dict(scope["headers"])
-    denied = headers.get(b"x-walter-denied", b"").decode()
-    if denied:
-        return _respond(send, 403, f"Dein Walterpass gilt nicht für {denied}. Frag Jörg nach einer Freigabe.".encode())
-    host = headers.get(b"host", b"").decode().split(":")[0]
-    meta = f'Bearer resource_metadata="https://{host}/.well-known/oauth-protected-resource"'
-    return _respond(send, 401, b"Walterpass erforderlich", extra=[(b"www-authenticate", meta.encode())])
-
 
 def main() -> None:
     if not api.user_agent:
         raise SystemExit("TRANSITOUS_USER_AGENT fehlt – Transitous verlangt App-Name, Version und Kontakt.")
     # stateless + JSON-Antworten: kein SSE, das vertragen Cloudflare und Caddy am besten
     app = mcp.streamable_http_app(stateless_http=True, json_response=True, host="0.0.0.0")
-    uvicorn.run(WalterUser(app), host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
+    uvicorn.run(PublicPaths(WalterUser(app)), host="0.0.0.0", port=int(os.environ.get("PORT", "8000")))
